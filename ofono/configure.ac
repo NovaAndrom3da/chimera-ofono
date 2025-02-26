@@ -111,7 +111,7 @@ fi
 AM_CONDITIONAL(SYSTEMD, test -n "${path_systemdunit}")
 
 AC_ARG_ENABLE(test, AC_HELP_STRING([--enable-test],
-		[enable test/example scripts]), [enable_test=${enableval}])
+		[enable test/example scripts]), [enable_test="no"])
 AM_CONDITIONAL(TEST, test "${enable_test}" = "yes")
 
 AC_ARG_ENABLE(tools, AC_HELP_STRING([--enable-tools],
@@ -176,11 +176,6 @@ PKG_CHECK_MODULES(GLIBUTIL, libglibutil >= 1.0.51, dummy=yes,
 			AC_MSG_ERROR(libglibutil >= 1.0.51 is required))
 CFLAGS="$CFLAGS $GLIBUTIL_CFLAGS"
 LIBS="$LIBS $GLIBUTIL_LIBS"
-
-PKG_CHECK_MODULES(DBUS_GLIB, dbus-glib-1, dummy=yes,
-		AC_MSG_ERROR(dbus-glib is required by unit tests))
-		AC_SUBST(DBUS_GLIB_CFLAGS)
-		AC_SUBST(DBUS_GLIB_LIBS)
 
 AC_ARG_ENABLE(add-remove-context, AC_HELP_STRING([--disable-add-remove-context],
 		[don't allow to add or remove connection context over D-Bus]), [
