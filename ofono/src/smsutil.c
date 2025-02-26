@@ -563,7 +563,7 @@ gboolean sms_encode_address_field(const struct sms_address *in, gboolean sc,
 			return FALSE;
 		}
 
-		r = pack_7bit_own_buf(gsm, written, 0, FALSE, &packed, 0, p);
+		r = pack_7bit_own_buf(gsm, written, 0, false, &packed, 0, p);
 
 		g_free(gsm);
 
@@ -628,6 +628,10 @@ gboolean sms_decode_address_field(const unsigned char *pdu, int len,
 	if (!next_octet(pdu, len, offset, &addr_len))
 		return FALSE;
 
+	/* According to 23.040 9.1.2.5 Address-Length must not exceed 20 */
+	if (addr_len > 20)
+		return FALSE;
+
 	if (sc && addr_len == 0) {
 		out->address[0] = '\0';
 		return TRUE;
@@ -670,7 +674,7 @@ gboolean sms_decode_address_field(const unsigned char *pdu, int len,
 			return TRUE;
 		}
 
-		res = unpack_7bit(pdu + *offset, byte_len, 0, FALSE, chars,
+		res = unpack_7bit(pdu + *offset, byte_len, 0, false, chars,
 					&written, 0);
 
 		*offset = *offset + (addr_len + 1) / 2;
@@ -778,6 +782,9 @@ static gboolean decode_deliver(const unsigned char *pdu, int len,
 		return FALSE;
 
 	expected = sms_udl_in_bytes(out->deliver.udl, out->deliver.dcs);
+
+	if (expected < 0 || expected > (int)sizeof(out->deliver.ud))
+		return FALSE;
 
 	if ((len - offset) < expected)
 		return FALSE;
@@ -941,10 +948,16 @@ static gboolean decode_submit_report(const unsigned char *pdu, int len,
 			return FALSE;
 
 		if (out->type == SMS_TYPE_SUBMIT_REPORT_ERROR) {
+			if (expected > (int) sizeof(out->submit_err_report.ud))
+				return FALSE;
+
 			out->submit_err_report.udl = udl;
 			memcpy(out->submit_err_report.ud,
 					pdu + offset, expected);
 		} else {
+			if (expected > (int) sizeof(out->submit_ack_report.ud))
+				return FALSE;
+
 			out->submit_ack_report.udl = udl;
 			memcpy(out->submit_ack_report.ud,
 					pdu + offset, expected);
@@ -1075,6 +1088,9 @@ static gboolean decode_status_report(const unsigned char *pdu, int len,
 						out->status_report.dcs);
 
 		if ((len - offset) < expected)
+			return FALSE;
+
+		if (expected > (int)sizeof(out->status_report.ud))
 			return FALSE;
 
 		memcpy(out->status_report.ud, pdu + offset, expected);
@@ -1226,10 +1242,16 @@ static gboolean decode_deliver_report(const unsigned char *pdu, int len,
 			return FALSE;
 
 		if (out->type == SMS_TYPE_DELIVER_REPORT_ERROR) {
+			if (expected > (int) sizeof(out->deliver_err_report.ud))
+				return FALSE;
+
 			out->deliver_err_report.udl = udl;
 			memcpy(out->deliver_err_report.ud,
 					pdu + offset, expected);
 		} else {
+			if (expected > (int) sizeof(out->deliver_ack_report.ud))
+				return FALSE;
+
 			out->deliver_ack_report.udl = udl;
 			memcpy(out->deliver_ack_report.ud,
 					pdu + offset, expected);
@@ -1333,7 +1355,7 @@ gboolean sms_decode_unpacked_stk_pdu(const unsigned char *pdu, int len,
 	if ((len - offset) < out->submit.udl)
 		return FALSE;
 
-	pack_7bit_own_buf(pdu + offset, out->submit.udl, 0, FALSE,
+	pack_7bit_own_buf(pdu + offset, out->submit.udl, 0, false,
 				NULL, 0, out->submit.ud);
 
 	return TRUE;
@@ -1462,6 +1484,9 @@ static gboolean decode_command(const unsigned char *pdu, int len,
 		return FALSE;
 
 	if ((len - offset) < out->command.cdl)
+		return FALSE;
+
+	if (out->command.cdl > sizeof(out->command.cd))
 		return FALSE;
 
 	memcpy(out->command.cd, pdu + offset, out->command.cdl);
@@ -2268,7 +2293,7 @@ char *sms_decode_text(GSList *sms_list)
 
 			if (unpack_7bit_own_buf(ud + taken,
 						udl_in_bytes - taken,
-						taken, FALSE, max_chars,
+						taken, false, max_chars,
 						&written, 0, buf) == NULL)
 				continue;
 
@@ -3423,19 +3448,21 @@ static inline GSList *sms_list_append(GSList *l, const struct sms *in)
 }
 
 /*
- * Prepares a datagram for transmission.  Breaks up into fragments if
- * necessary using ref as the concatenated message reference number.
+ * Prepares a datagram for transmission with requested endianess  Breaks up
+ * into fragments if necessary using ref as the concatenated message reference
+ * number.
  * Returns a list of sms messages in order.
  *
  * @use_delivery_reports: value for the Status-Report-Request field
  *     (23.040 3.2.9, 9.2.2.2)
  */
-GSList *sms_datagram_prepare(const char *to,
+GSList *sms_datagram_prepare_with_endianess(const char *to,
 				const unsigned char *data, unsigned int len,
 				guint16 ref, gboolean use_16bit_ref,
 				unsigned short src, unsigned short dst,
 				gboolean use_16bit_port,
-				gboolean use_delivery_reports)
+				gboolean use_delivery_reports,
+				enum sms_datagram_endianess endianess)
 {
 	struct sms template;
 	unsigned int offset;
@@ -3462,10 +3489,22 @@ GSList *sms_datagram_prepare(const char *to,
 		template.submit.ud[0] += 6;
 		template.submit.ud[offset] = SMS_IEI_APPLICATION_ADDRESS_16BIT;
 		template.submit.ud[offset + 1] = 4;
-		template.submit.ud[offset + 2] = (dst & 0xff00) >> 8;
-		template.submit.ud[offset + 3] = dst & 0xff;
-		template.submit.ud[offset + 4] = (src & 0xff00) >> 8;
-		template.submit.ud[offset + 5] = src & 0xff;
+
+		switch (endianess) {
+		case SMS_DATAGRAM_ENDIANESS_GSM:
+		case SMS_DATAGRAM_ENDIANESS_BIG_ENDIAN:
+			template.submit.ud[offset + 2] = (dst & 0xff00) >> 8;
+			template.submit.ud[offset + 3] = dst & 0xff;
+			template.submit.ud[offset + 4] = (src & 0xff00) >> 8;
+			template.submit.ud[offset + 5] = src & 0xff;
+			break;
+		case SMS_DATAGRAM_ENDIANESS_LITTLE_ENDIAN:
+			template.submit.ud[offset + 2] = dst & 0xff;
+			template.submit.ud[offset + 3] = (dst & 0xff00) >> 8;
+			template.submit.ud[offset + 4] = src & 0xff;
+			template.submit.ud[offset + 5] = (src & 0xff00) >> 8;
+			break;
+		}
 
 		offset += 6;
 	} else {
@@ -3489,8 +3528,18 @@ GSList *sms_datagram_prepare(const char *to,
 		template.submit.ud[0] += 6;
 		template.submit.ud[offset] = SMS_IEI_CONCATENATED_16BIT;
 		template.submit.ud[offset + 1] = 4;
-		template.submit.ud[offset + 2] = (ref & 0xff00) >> 8;
-		template.submit.ud[offset + 3] = ref & 0xff;
+
+		switch (endianess) {
+		case SMS_DATAGRAM_ENDIANESS_GSM:
+		case SMS_DATAGRAM_ENDIANESS_BIG_ENDIAN:
+			template.submit.ud[offset + 2] = (ref & 0xff00) >> 8;
+			template.submit.ud[offset + 3] = ref & 0xff;
+			break;
+		case SMS_DATAGRAM_ENDIANESS_LITTLE_ENDIAN:
+			template.submit.ud[offset + 2] = ref & 0xff;
+			template.submit.ud[offset + 3] = (ref & 0xff00) >> 8;
+			break;
+		}
 
 		offset += 6;
 	} else {
@@ -3546,6 +3595,28 @@ GSList *sms_datagram_prepare(const char *to,
 	r = g_slist_reverse(r);
 
 	return r;
+}
+
+/*
+ * Prepares a datagram for transmission  Breaks up into fragments if
+ * necessary using ref as the concatenated message reference number.
+ * Returns a list of sms messages in order.
+ *
+ * @use_delivery_reports: value for the Status-Report-Request field
+ *     (23.040 3.2.9, 9.2.2.2)
+ */
+
+GSList *sms_datagram_prepare(const char *to,
+				const unsigned char *data, unsigned int len,
+				guint16 ref, gboolean use_16bit_ref,
+				unsigned short src, unsigned short dst,
+				gboolean use_16bit_port,
+				gboolean use_delivery_reports)
+{
+	return sms_datagram_prepare_with_endianess(to, data, len, ref,
+					use_16bit_ref, src, dst,
+					use_16bit_port, use_delivery_reports,
+					SMS_DATAGRAM_ENDIANESS_GSM);
 }
 
 /*
@@ -3632,7 +3703,7 @@ GSList *sms_text_prepare_with_alphabet(const char *to, const char *utf8,
 
 	if (gsm_encoded && (written <= sms_text_capacity_gsm(160, offset))) {
 		template.submit.udl = written + (offset * 8 + 6) / 7;
-		pack_7bit_own_buf(gsm_encoded, written, offset, FALSE, NULL,
+		pack_7bit_own_buf(gsm_encoded, written, offset, false, NULL,
 					0, template.submit.ud + offset);
 
 		g_free(gsm_encoded);
@@ -3689,7 +3760,7 @@ GSList *sms_text_prepare_with_alphabet(const char *to, const char *utf8,
 
 			template.submit.udl = chunk + (offset * 8 + 6) / 7;
 			pack_7bit_own_buf(gsm_encoded + written, chunk,
-						offset, FALSE, NULL, 0,
+						offset, false, NULL, 0,
 						template.submit.ud + offset);
 		} else {
 			chunk = 140 - offset;
@@ -4100,7 +4171,7 @@ char *cbs_decode_text(GSList *cbs_list, char *iso639_lang)
 				taken = sms_udh_iter_get_udh_length(&iter) + 1;
 
 			unpack_7bit_own_buf(cbs->ud + taken, cbs->udlen - taken,
-						taken, FALSE, 2,
+						taken, false, 2,
 						NULL, 0,
 						(unsigned char *)iso639_lang);
 			iso639_lang[2] = '\0';
@@ -4133,7 +4204,7 @@ char *cbs_decode_text(GSList *cbs_list, char *iso639_lang)
 				sms_text_capacity_gsm(CBS_MAX_GSM_CHARS, taken);
 
 			unpack_7bit_own_buf(ud + taken, cbs->udlen - taken,
-						taken, FALSE, max_chars,
+						taken, false, max_chars,
 						&written, 0, unpacked);
 
 			i = iso639 ? 3 : 0;
@@ -4547,12 +4618,10 @@ out:
 GSList *cbs_optimize_ranges(GSList *ranges)
 {
 	struct cbs_topic_range *range;
-	unsigned char bitmap[125];
+	unsigned char *bitmap = g_malloc0(CBS_MAX_TOPIC / 8 + 1);
 	GSList *l;
 	unsigned short i;
 	GSList *ret = NULL;
-
-	memset(bitmap, 0, sizeof(bitmap));
 
 	for (l = ranges; l; l = l->next) {
 		range = l->data;
@@ -4567,7 +4636,7 @@ GSList *cbs_optimize_ranges(GSList *ranges)
 
 	range = NULL;
 
-	for (i = 0; i <= 999; i++) {
+	for (i = 0; i <= CBS_MAX_TOPIC; i++) {
 		int byte_offset = i / 8;
 		int bit = i % 8;
 
@@ -4595,6 +4664,7 @@ GSList *cbs_optimize_ranges(GSList *ranges)
 
 	ret = g_slist_reverse(ret);
 
+	g_free(bitmap);
 	return ret;
 }
 
@@ -4607,10 +4677,10 @@ GSList *cbs_extract_topic_ranges(const char *ranges)
 	GSList *tmp;
 
 	while (next_range(ranges, &offset, &min, &max) == TRUE) {
-		if (min < 0 || min > 999)
+		if (min < 0 || min > CBS_MAX_TOPIC)
 			return NULL;
 
-		if (max < 0 || max > 999)
+		if (max < 0 || max > CBS_MAX_TOPIC)
 			return NULL;
 
 		if (max < min)
@@ -4740,7 +4810,7 @@ char *ussd_decode(int dcs, int len, const unsigned char *data)
 	case SMS_CHARSET_7BIT:
 	{
 		long written;
-		unsigned char *unpacked = unpack_7bit(data, len, 0, TRUE, 0,
+		unsigned char *unpacked = unpack_7bit(data, len, 0, true, 0,
 							&written, 0);
 		if (unpacked == NULL)
 			return NULL;
@@ -4780,7 +4850,7 @@ gboolean ussd_encode(const char *str, long *items_written, unsigned char *pdu)
 		return FALSE;
 	}
 
-	pack_7bit_own_buf(converted, written, 0, TRUE, &num_packed, 0, pdu);
+	pack_7bit_own_buf(converted, written, 0, true, &num_packed, 0, pdu);
 	g_free(converted);
 
 	if (num_packed < 1)

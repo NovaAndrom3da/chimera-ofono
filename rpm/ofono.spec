@@ -1,6 +1,6 @@
 Name:       ofono
 Summary:    Open Source Telephony
-Version:    1.25
+Version:    1.29
 Release:    1
 License:    GPLv2
 URL:        https://github.com/sailfishos/ofono
@@ -22,7 +22,7 @@ BuildRequires: pkgconfig(rpm)
 Requires:   dbus
 Requires:   systemd
 Requires:   libglibutil >= %{libglibutil_version}
-%{recommend}: mobile-broadband-provider-info
+Requires:   mobile-broadband-provider-info
 %{recommend}: ofono-configs
 Requires(preun): systemd
 Requires(post): systemd

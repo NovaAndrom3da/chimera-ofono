@@ -1,7 +1,7 @@
 /*
  *  oFono - Open Source Telephony
  *
- *  Copyright (C) 2017-2021 Jolla Ltd.
+ *  Copyright (C) 2017-2022 Jolla Ltd.
  *  Copyright (C) 2019-2020 Open Mobile Platform LLC.
  *
  *  This program is free software; you can redistribute it and/or modify
@@ -50,6 +50,12 @@
 #define TEST_ERROR_KEY "Error"
 #define TEST_SLOT_ERROR_KEY "SlotError"
 #define TEST_CONFIG_DIR_TEMPLATE "test-saifish_manager-config-XXXXXX"
+
+#define SM_STORE                    "ril"
+#define SM_STORE_GROUP              "Settings"
+#define SM_STORE_ENABLED_SLOTS      "EnabledSlots"
+#define SM_STORE_DEFAULT_VOICE_SIM  "DefaultVoiceSim"
+#define SM_STORE_DEFAULT_DATA_SIM   "DefaultDataSim"
 
 static GMainLoop *test_loop = NULL;
 static GSList *test_drivers = NULL;
@@ -1141,6 +1147,7 @@ static gboolean test_data_sim_done(gpointer user_data)
 	/* Set data SIM IMSI */
 	fake_slot_manager_dbus.cb.set_default_data_imsi(m, TEST_IMSI);
 	g_assert_cmpstr(m->default_data_imsi, == ,TEST_IMSI);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_NONE);
 	g_assert(!m->default_data_path); /* Modem is offline */
 	/* Data IMSI is signaled, path is not */
 	g_assert_cmpuint(fake_slot_manager_dbus.signals &
@@ -1157,6 +1164,7 @@ static gboolean test_data_sim_done(gpointer user_data)
 	fake_watch_emit_queued_signals(w);
 	/* Now is should point to our slot */
 	g_assert_cmpstr(m->default_data_path, == ,TEST_PATH);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_INTERNET);
 	/* And D-Bus clients are notified */
 	g_assert(fake_slot_manager_dbus.signals &
 		SLOT_MANAGER_DBUS_SIGNAL_DATA_PATH);
@@ -1166,6 +1174,7 @@ static gboolean test_data_sim_done(gpointer user_data)
 	fake_slot_manager_dbus.cb.set_default_data_imsi(m, TEST_IMSI_1);
 	g_assert_cmpstr(m->default_data_imsi, == ,TEST_IMSI_1);
 	g_assert(!m->default_data_path);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_NONE);
 	/* And D-Bus clients are notified again */
 	g_assert_cmpuint(fake_slot_manager_dbus.signals &
 		(SLOT_MANAGER_DBUS_SIGNAL_DATA_IMSI |
@@ -1177,8 +1186,10 @@ static gboolean test_data_sim_done(gpointer user_data)
 
 	/* Switch the SIM */
 	fake_watch_set_ofono_imsi(w, TEST_IMSI_1);
+	fake_watch_set_ofono_iccid(w, TEST_ICCID_1);
 	fake_watch_emit_queued_signals(w);
 	g_assert_cmpstr(m->default_data_path, == ,TEST_PATH);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_INTERNET);
 	/* And D-Bus clients are notified of data path change */
 	g_assert_cmpuint(fake_slot_manager_dbus.signals &
 		(SLOT_MANAGER_DBUS_SIGNAL_DATA_IMSI |
@@ -1193,7 +1204,22 @@ static gboolean test_data_sim_done(gpointer user_data)
 	g_assert_cmpint(m->slots[0]->sim_presence, == ,OFONO_SLOT_SIM_ABSENT);
 	g_assert_cmpstr(m->default_data_imsi, == ,TEST_IMSI_1);
 	g_assert(!m->default_data_path);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_NONE);
 	/* And D-Bus clients are notified of data path change */
+	g_assert_cmpuint(fake_slot_manager_dbus.signals &
+		(SLOT_MANAGER_DBUS_SIGNAL_DATA_IMSI |
+		 SLOT_MANAGER_DBUS_SIGNAL_DATA_PATH), == ,
+		 SLOT_MANAGER_DBUS_SIGNAL_DATA_PATH);
+	fake_slot_manager_dbus.signals &= ~SLOT_MANAGER_DBUS_SIGNAL_DATA_IMSI;
+
+	/* Insert the SIM back */
+	fake_watch_set_ofono_sim(w, &sim);
+	ofono_slot_set_sim_presence(s, OFONO_SLOT_SIM_PRESENT);
+	g_assert_cmpint(s->sim_presence, == ,OFONO_SLOT_SIM_PRESENT);
+	fake_watch_set_ofono_iccid(w, TEST_ICCID_1);
+	fake_watch_set_ofono_imsi(w, TEST_IMSI_1);
+	fake_watch_emit_queued_signals(w);
+	g_assert_cmpint(s->data_role, == ,OFONO_SLOT_DATA_INTERNET);
 	g_assert_cmpuint(fake_slot_manager_dbus.signals &
 		(SLOT_MANAGER_DBUS_SIGNAL_DATA_IMSI |
 		 SLOT_MANAGER_DBUS_SIGNAL_DATA_PATH), == ,
@@ -1629,6 +1655,102 @@ static void test_multisim(void)
 	test_common_deinit();
 }
 
+/* ==== config_storage ==== */
+
+static gboolean test_config_storage_run(gpointer user_data)
+{
+	TestDriverData *dd = user_data;
+	struct ofono_slot_manager *m = fake_slot_manager_dbus.m;
+	struct ofono_slot *s = ofono_slot_add(dd->manager, TEST_PATH,
+		OFONO_RADIO_ACCESS_MODE_GSM, TEST_IMEI, TEST_IMEISV,
+		OFONO_SLOT_SIM_PRESENT, OFONO_SLOT_NO_FLAGS);
+	struct ofono_slot *s2 = ofono_slot_add(dd->manager, TEST_PATH_1,
+		OFONO_RADIO_ACCESS_MODE_GSM, TEST_IMEI_1, TEST_IMEISV,
+		OFONO_SLOT_SIM_PRESENT, OFONO_SLOT_NO_FLAGS);
+	char *storage_file = g_build_filename(STORAGEDIR, SM_STORE, NULL);
+	GKeyFile *storage;
+	char **slots;
+	char* val;
+
+	DBG("");
+
+	/* Unblocking D-Bus clients will exit the loop */
+	fake_slot_manager_dbus.fn_block_changed =
+		test_quit_loop_when_unblocked;
+
+	/* Finish initialization with 2 slots */
+	g_assert(s);
+	g_assert(s2);
+	g_assert(!m->ready);
+	ofono_slot_driver_started(test_driver_reg);
+	ofono_slot_unref(s);
+	ofono_slot_unref(s2);
+	g_assert(m->ready);
+
+	/* No file yet */
+	storage = g_key_file_new();
+	g_assert(!g_key_file_load_from_file(storage, storage_file, 0, NULL));
+
+	/* Enable one slot */
+	slots = gutil_strv_add(NULL, TEST_PATH);
+	fake_slot_manager_dbus.cb.set_enabled_slots(m, slots);
+	g_assert(m->slots[0]->enabled);
+	g_assert(!m->slots[1]->enabled);
+
+	/* Check the config file */
+	g_assert(g_key_file_load_from_file(storage, storage_file, 0, NULL));
+	val = g_key_file_get_string(storage, SM_STORE_GROUP,
+		SM_STORE_ENABLED_SLOTS, NULL);
+	g_assert_cmpstr(val, == ,TEST_PATH);
+	g_free(val);
+	g_key_file_free(storage);
+
+	/* Enable both slots */
+	slots = gutil_strv_add(slots, TEST_PATH_1);
+	fake_slot_manager_dbus.cb.set_enabled_slots(m, slots);
+	g_assert(m->slots[0]->enabled);
+	g_assert(m->slots[1]->enabled);
+	g_strfreev(slots);
+
+	/* There's no [EnabledSlots] there because it's the default config */
+	storage = g_key_file_new();
+	g_assert(g_key_file_load_from_file(storage, storage_file, 0, NULL));
+	g_assert(!g_key_file_get_string(storage, SM_STORE_GROUP,
+		SM_STORE_ENABLED_SLOTS, NULL));
+	g_key_file_free(storage);
+
+	g_free(storage_file);
+	return G_SOURCE_REMOVE;
+}
+
+static guint test_config_storage_start(TestDriverData *dd)
+{
+	return g_idle_add(test_config_storage_run, dd);
+}
+
+static void test_config_storage(void)
+{
+	static const struct ofono_slot_driver test_config_storage_d = {
+		.name = "config_storage",
+		.api_version = OFONO_SLOT_API_VERSION,
+		.init = test_driver_init,
+		.start = test_config_storage_start,
+		.cleanup = test_driver_cleanup
+	};
+
+	test_common_init();
+
+	test_driver_reg = ofono_slot_driver_register(&test_config_storage_d);
+	g_assert(test_driver_reg);
+	g_main_loop_run(test_loop);
+	g_assert(test_timeout_id);
+
+	ofono_slot_driver_unregister(test_driver_reg);
+	test_driver_reg = NULL;
+	test_common_deinit();
+}
+
+
 /* ==== storage ==== */
 
 static void test_storage_init()
@@ -1805,6 +1927,7 @@ int main(int argc, char *argv[])
 	g_test_add_data_func(TEST_("auto_data_sim_once"), "once",
 						test_auto_data_sim);
 	g_test_add_func(TEST_("multisim"), test_multisim);
+	g_test_add_func(TEST_("config_storage"), test_config_storage);
 	g_test_add_func(TEST_("storage"), test_storage);
 	return g_test_run();
 }

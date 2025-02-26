@@ -424,7 +424,7 @@ int mmi_service_code_to_bearer_class(int code)
 }
 
 const char *ofono_phone_number_to_string(const struct ofono_phone_number *ph,
-			char buffer[/* OFONO_MAX_PHONE_NUMBER_BUFFER_SIZE */])
+			char buffer[/* OFONO_PHONE_NUMBER_BUFFER_SIZE */])
 {
 	if (ph->type == 145 && (strlen(ph->number) > 0) &&
 			ph->number[0] != '+') {
@@ -706,8 +706,20 @@ const char *registration_tech_to_string(enum ofono_access_technology tech)
 		return "hspa";
 	case ACCESS_TECHNOLOGY_EUTRAN:
 		return "lte";
+	case ACCESS_TECHNOLOGY_NB_IOT_M1:
+		return "lte-cat-m1";
+	case ACCESS_TECHNOLOGY_NB_IOT_NB1:
+		return "lte-cat-nb1";
+	case ACCESS_TECHNOLOGY_EUTRA_5GCN:
+		return "lte";
+	case ACCESS_TECHNOLOGY_NR_5GCN:
+	case ACCESS_TECHNOLOGY_NG_RAN:
+	case ACCESS_TECHNOLOGY_EUTRA_NR:
+		return "nr";
 	case OFONO_ACCESS_TECHNOLOGY_NONE:
 		break;
+	default:
+		return "";
 	}
 	return "";
 }
