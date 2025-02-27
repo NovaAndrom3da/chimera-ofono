@@ -944,9 +944,8 @@ unit_test_cell_info_dbus_SOURCES = unit/test-dbus.c \
 			src/cell-info.c src/cell-info-dbus.c \
 			src/cell-info-control.c gdbus/object.c \
 			src/dbus-clients.c src/dbus.c src/log.c
-unit_test_cell_info_dbus_CFLAGS = $(AM_CFLAGS) $(COVERAGE_OPT) \
-			@DBUS_GLIB_CFLAGS@
-unit_test_cell_info_dbus_LDADD = @DBUS_GLIB_LIBS@ @GLIB_LIBS@ -ldl
+unit_test_cell_info_dbus_CFLAGS = $(AM_CFLAGS) $(COVERAGE_OPT)
+unit_test_cell_info_dbus_LDADD =  @GLIB_LIBS@ -ldl
 unit_objects += $(unit_test_cell_info_dbus_OBJECTS)
 unit_tests += unit/test-cell-info-dbus
 
@@ -964,8 +963,8 @@ unit_test_sim_info_dbus_SOURCES = unit/test-sim-info-dbus.c \
 			gdbus/object.c \
 			src/dbus.c src/storage.c src/watchlist.c src/log.c
 unit_test_sim_info_dbus_CFLAGS = $(COVERAGE_OPT) $(AM_CFLAGS) \
-			@DBUS_GLIB_CFLAGS@ -DSTORAGEDIR='"/tmp/ofono"'
-unit_test_sim_info_dbus_LDADD = @DBUS_GLIB_LIBS@ @GLIB_LIBS@ -ldl
+			-DSTORAGEDIR='"/tmp/ofono"'
+unit_test_sim_info_dbus_LDADD =  @GLIB_LIBS@ -ldl
 unit_objects += $(unit_test_sim_info_dbus_OBJECTS)
 unit_tests += unit/test-sim-info-dbus
 
@@ -1082,16 +1081,16 @@ unit_objects += $(unit_test_caif_OBJECTS)
 unit_test_dbus_clients_SOURCES = unit/test-dbus-clients.c unit/test-dbus.c \
 				src/dbus-clients.c gdbus/object.c \
 				src/dbus.c src/log.c
-unit_test_dbus_clients_CFLAGS =  @DBUS_GLIB_CFLAGS@ $(COVERAGE_OPT) $(AM_CFLAGS)
-unit_test_dbus_clients_LDADD = @DBUS_GLIB_LIBS@ @GLIB_LIBS@ -ldl
+unit_test_dbus_clients_CFLAGS =  $(COVERAGE_OPT) $(AM_CFLAGS)
+unit_test_dbus_clients_LDADD = @GLIB_LIBS@ -ldl
 unit_objects += $(unit_test_dbus_clients_OBJECTS)
 unit_tests += unit/test-dbus-clients
 
 unit_test_dbus_queue_SOURCES = unit/test-dbus-queue.c unit/test-dbus.c \
 				src/dbus-queue.c gdbus/object.c \
 				src/dbus.c src/log.c
-unit_test_dbus_queue_CFLAGS =  @DBUS_GLIB_CFLAGS@ $(COVERAGE_OPT) $(AM_CFLAGS)
-unit_test_dbus_queue_LDADD = @DBUS_GLIB_LIBS@ @GLIB_LIBS@ -ldl
+unit_test_dbus_queue_CFLAGS =  $(COVERAGE_OPT) $(AM_CFLAGS)
+unit_test_dbus_queue_LDADD = @GLIB_LIBS@ -ldl
 unit_objects += $(unit_test_dbus_queue_OBJECTS)
 unit_tests += unit/test-dbus-queue
 
